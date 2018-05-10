@@ -1,0 +1,14 @@
+{
+    "compilerOptions": {
+        "outDir": "",
+        "allowJs": true,
+        "target": "es6",
+        "lib": [
+            "es6"
+        ],
+        "module": "commonjs"
+    },
+    "include": [
+        "./**/*.ts"
+    ]
+}

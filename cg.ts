@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 'use strict';
-Object.defineProperty(exports, "__esModule", { value: true });
+
 const fs = require('fs');
 const path = require('path');
 // import url from 'url';
-const url = require("url");
+import * as url from 'url';
 const util = require('util');
+
 const yaml = require('js-yaml');
 const fetch = require('node-fetch');
 const co = require('co');
 const swagger2openapi = require('swagger2openapi');
 const stools = require('swagger-tools');
 const admzip = require('adm-zip');
+
 const processor = require('./index.js');
+
 var argv = require('yargs')
     .usage('cg [options] {[path]configName} {openapi-definition}')
     .boolean('debug')
@@ -42,26 +45,31 @@ var argv = require('yargs')
     .describe('zip', 'Create a .zip file instead of individual files')
     .version()
     .argv;
+
 let configStr = argv._[0] || 'nodejs';
 let configName = path.basename(configStr);
 let configPath = path.dirname(configStr);
-if (!configPath || (configPath === '.'))
-    configPath = './configs';
+if (!configPath || (configPath === '.')) configPath = './configs';
 let configFile = path.resolve(configPath, configName) + '.json';
 let config = require(configFile);
 let defName = argv._[1] || './defs/petstore3.json';
+
 config.outputDir = argv.output;
 config.templateDir = argv.templates;
+
 let zipFiles = {};
-function nop(arg, callback) { if (callback)
-    callback(null, true); return true; }
+
+function nop(arg, callback) { if (callback) callback(null, true); return true; }
+
 function zipFile(filename, contents, encoding) {
     zipFiles[filename] = contents;
 }
+
 function finish(err, result) {
     if (argv.zip) {
         // create archive
         var zip = new admzip();
+
         // add files directly
         for (let f in zipFiles) {
             zip.addFile(f, new Buffer(zipFiles[f]), 'Created with OpenAPI-CodeGen');
@@ -70,9 +78,9 @@ function finish(err, result) {
         zip.writeZip(path.join(config.outputDir, configName + '.zip'));
     }
 }
+
 function convert20(obj) {
-    if (argv.verbose)
-        console.log('Converting OpenAPI 2.0 definition');
+    if (argv.verbose) console.log('Converting OpenAPI 2.0 definition');
     swagger2openapi.convertObj(obj, { patch: true, warnOnly: true, direct: true }, function (err, openapi) {
         if (err) {
             console.error(util.inspect(err));
@@ -83,10 +91,10 @@ function convert20(obj) {
         }
     });
 }
+
 function convert12(api) {
-    if (argv.verbose)
-        console.log('Converting Swagger 1.2 definition');
-    let options = {};
+    if (argv.verbose) console.log('Converting Swagger 1.2 definition');
+    let options: any = {};
     options.source = defName;
     var base = options.source.split('/');
     var filename = base.pop();
@@ -101,9 +109,11 @@ function convert12(api) {
         base.push(filename);
     }
     base = base.join('/');
+
     //if (options.source.endsWith('.json') || options.source.endsWith('.yaml')) {
     //    extension = '';
     //}
+
     var retrieve = [];
     var apiDeclarations = [];
     if (api.apis) {
@@ -120,25 +130,24 @@ function convert12(api) {
             if (component.path.indexOf('://') >= 0) {
                 lbase = '';
             }
+
             var u = (lbase + component.path);
-            if (!u.endsWith(extension))
-                u += extension;
-            if (argv.verbose)
-                console.log(u);
+            if (!u.endsWith(extension)) u += extension;
+            if (argv.verbose) console.log(u);
             retrieve.push(fetch(u, options.fetchOptions)
                 .then(res => {
-                if (argv.verbose)
-                    console.log(res.status);
-                return res.text();
-            })
+                    if (argv.verbose) console.log(res.status);
+                    return res.text();
+                })
                 .then(data => {
-                apiDeclarations.push(yaml.safeLoad(data, { json: true }));
-            })
+                    apiDeclarations.push(yaml.safeLoad(data, { json: true }));
+                })
                 .catch(err => {
-                console.error(util.inspect(err));
-            }));
+                    console.error(util.inspect(err));
+                }));
         }
     }
+
     co(function* () {
         // resolve multiple promises in parallel
         var res = yield retrieve;
@@ -156,10 +165,11 @@ function convert12(api) {
         });
     });
 }
+
 function main(s) {
     let o = yaml.safeLoad(s, { json: true });
-    if (argv.verbose)
-        console.log('Loaded definition ' + defName);
+    if (argv.verbose) console.log('Loaded definition ' + defName);
+
     if (o && o.openapi) {
         processor.main(o, config, configName, finish);
     }
@@ -175,34 +185,32 @@ function main(s) {
         }
     }
 }
+
 if (argv.verbose) {
     config.defaults.verbose = true;
     console.log('Loaded config ' + configName);
 }
-if (argv.lint)
-    config.defaults.lint = true;
-if (argv.debug)
-    config.defaults.debug = true;
-if (argv.flat)
-    config.defaults.flat = true;
-if (argv.stools)
-    config.defaults.stools = true;
+if (argv.lint) config.defaults.lint = true;
+if (argv.debug) config.defaults.debug = true;
+if (argv.flat) config.defaults.flat = true;
+if (argv.stools) config.defaults.stools = true;
 if (argv.zip) {
     processor.fileFunctions.createFile = zipFile;
     processor.fileFunctions.rimraf = nop;
     processor.fileFunctions.mkdirp = nop;
     processor.fileFunctions.mkdirp.sync = nop;
 }
+
 let up = url.parse(defName);
 if (up.protocol && up.protocol.startsWith('http')) {
     fetch(defName)
         .then(function (res) {
-        return res.text();
-    }).then(function (body) {
-        main(body);
-    }).catch(function (err) {
-        console.error(err.message);
-    });
+            return res.text();
+        }).then(function (body) {
+            main(body);
+        }).catch(function (err) {
+            console.error(err.message);
+        });
 }
 else {
     let s = fs.readFileSync(defName, 'utf8');
