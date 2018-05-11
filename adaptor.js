@@ -1,4 +1,7 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 // 'use strict';
+const oas = require("./lib/oas/oas.classes");
 const util = require('util');
 const url = require('url');
 const yaml = require('js-yaml');
@@ -168,9 +171,13 @@ function convertOperation(op, verb, path, pathItem, obj, api) {
     let authData = getAuthData(op.security || api.security, api);
     operation = Object.assign(operation, authData);
     let effParameters = (op.parameters || []).concat(pathItem.parameters || []);
-    effParameters = effParameters.filter((param, index, self) => self.findIndex((p) => { return p.name === param.name && p.in === param.in; }) === index);
+    effParameters = effParameters.filter((param, index, self) => self.findIndex((p) => {
+        // UNDONE: HACK: casted to ParamWith... or any
+        return p.name === param.name && p.in === param.in;
+    }) === index);
     for (let pa in effParameters) {
         operation.hasParams = true;
+        // cast to classes of the types of parameter with schema/content
         let param = effParameters[pa];
         let parameter = {};
         parameter.isHeaderParam = false;
@@ -186,44 +193,57 @@ function convertOperation(op, verb, path, pathItem, obj, api) {
             operation.hasRequiredParams = true;
         if (!parameter.required)
             operation.hasOptionalParams = true;
-        parameter.dataType = typeMap(param.schema.type, parameter.required, param.schema);
-        parameter["%dataType%"] = parameter.dataType; // bug in typescript-fetch template? trying to use {{{ with different delimiters
-        for (let p of schemaProperties) {
-            if (typeof param.schema[p] !== 'undefined')
-                parameter[p] = param.schema[p];
+        // only update schema and style with these instances
+        if (param instanceof oas.ParameterWithSchemaWithExampleInPath ||
+            param instanceof oas.ParameterWithSchemaWithExampleInQuery ||
+            param instanceof oas.ParameterWithSchemaWithExampleInHeader ||
+            param instanceof oas.ParameterWithSchemaWithExampleInCookie ||
+            param instanceof oas.ParameterWithSchemaWithExamplesInPath ||
+            param instanceof oas.ParameterWithSchemaWithExamplesInQuery ||
+            param instanceof oas.ParameterWithSchemaWithExamplesInHeader ||
+            param instanceof oas.ParameterWithSchemaWithExamplesInCookie) {
+            if (param.schema instanceof oas.Schema) {
+                parameter.dataType = typeMap(param.schema.type, parameter.required, param.schema);
+                parameter.isBoolean = (param.schema.type === 'boolean');
+                parameter.dataFormat = param.schema.format;
+            }
+            for (let p of schemaProperties) {
+                if (typeof param.schema[p] !== 'undefined')
+                    parameter[p] = param.schema[p];
+            }
+            parameter.example = JSON.stringify(sampler.sample(param.schema, {}, api));
+            parameter.isPrimitiveType = (!param.schema["x-oldref"]);
+            if (param.style === 'form') {
+                if (param.explode) {
+                    parameter.collectionFormat = 'multi';
+                }
+                else {
+                    parameter.collectionFormat = 'csv';
+                }
+            }
+            else if (param.style === 'simple') {
+                parameter.collectionFormat = 'csv';
+            }
+            else if (param.style === 'spaceDelimited') {
+                parameter.collectionFormat = 'ssv';
+            }
+            else if (param.style === 'pipeDelimited') {
+                parameter.collectionFormat = 'pipes';
+            }
         }
-        parameter.example = JSON.stringify(sampler.sample(param.schema, {}, api));
-        parameter.isBoolean = (param.schema.type === 'boolean');
-        parameter.isPrimitiveType = (!param.schema["x-oldref"]);
-        parameter.dataFormat = param.schema.format;
+        parameter["%dataType%"] = parameter.dataType; // bug in typescript-fetch template? trying to use {{{ with different delimiters
         parameter.isDate = (parameter.dataFormat == 'date');
         parameter.isDateTime = (parameter.dataFormat == 'date-time');
         parameter.description = param.description || '';
         parameter.unescapedDescription = param.description;
-        parameter.defaultValue = param.default;
+        // UNDONE: invalid? parameter.defaultValue = param.default;
         parameter.isFile = false;
         parameter.isEnum = false; // TODO?
         parameter.vendorExtensions = specificationExtensions(param);
-        if (param.nullable) {
-            parameter.vendorExtensions["x-nullable"] = true;
-        }
-        if (param.style === 'form') {
-            if (param.explode) {
-                parameter.collectionFormat = 'multi';
-            }
-            else {
-                parameter.collectionFormat = 'csv';
-            }
-        }
-        else if (param.style === 'simple') {
-            parameter.collectionFormat = 'csv';
-        }
-        else if (param.style === 'spaceDelimited') {
-            parameter.collectionFormat = 'ssv';
-        }
-        else if (param.style === 'pipeDelimited') {
-            parameter.collectionFormat = 'pipes';
-        }
+        // UNDONE: invalid?
+        // if (param.nullable) {
+        //     parameter.vendorExtensions["x-nullable"] = true;
+        // }
         if ((param["x-collectionFormat"] === 'tsv') || (param["x-tabDelimited"])) {
             parameter.collectionFormat = 'tsv';
         }
@@ -243,11 +263,12 @@ function convertOperation(op, verb, path, pathItem, obj, api) {
             operation.headerParams.push(clone(parameter));
             operation.hasHeaderParams = true;
         }
-        if (param.in === 'form') {
+        if (param.in === 'cookie') {
             parameter.isFormParam = true;
             operation.formParams.push(clone(parameter));
             operation.hasFormParams = true;
         }
+        //}
     } // end of effective parameters
     operation.bodyParams = [];
     if (op.requestBody) {
@@ -265,38 +286,40 @@ function convertOperation(op, verb, path, pathItem, obj, api) {
         operation.bodyParam.baseName = 'body';
         operation.bodyParam.paramName = 'body';
         operation.bodyParam.baseType = 'object';
-        operation.bodyParam.required = op.requestBody.required || false;
         operation.bodyParam.optional = !operation.bodyParam.required;
         if (operation.bodyParam.required)
             operation.hasRequiredParams = true;
         if (!operation.bodyParam.required)
             operation.hasOptionalParams = true;
         operation.bodyParam.dataType = typeMap('object', operation.bodyParam.required, {}); // can be changed below
-        operation.bodyParam.description = op.requestBody.description || '';
         operation.bodyParam.schema = {};
         operation.bodyParam.isEnum = false; // TODO?
         operation.bodyParam.vendorExtensions = specificationExtensions(op.requestBody);
-        if (op.requestBody.content) {
-            let contentType = op.requestBody.content[Object.keys(op.requestBody.content)[0]];
-            let mt = { mediaType: Object.keys(op.requestBody.content)[0] };
-            operation.consumes.push(mt);
-            operation.hasConsumes = true;
-            let tmp = obj.consumes.find(function (e, i, a) {
-                return (e.mediaType === mt.mediaType);
-            });
-            if (!tmp) {
-                obj.consumes.push(clone(mt)); // so convertArray works correctly
-                obj.hasConsumes = true;
-            }
-            operation.bodyParam.schema = contentType.schema;
-            operation.bodyParam.example = JSON.stringify(sampler.sample(contentType.schema, {}, api));
-            for (let p in schemaProperties) {
-                if (typeof contentType.schema[p] !== 'undefined')
-                    operation.bodyParam[p] = contentType.schema[p];
-            }
-            if (contentType.schema.type) {
-                operation.bodyParam.type = contentType.schema.type;
-                operation.bodyParam.dataType = typeMap(contentType.schema.type, operation.bodyParam.required, contentType.schema); // this is the below mentioned
+        if (op.requestBody instanceof oas.RequestBody) {
+            operation.bodyParam.required = op.requestBody.required || false;
+            operation.bodyParam.description = op.requestBody.description || '';
+            if (op.requestBody.content) {
+                let contentType = op.requestBody.content[Object.keys(op.requestBody.content)[0]];
+                let mt = { mediaType: Object.keys(op.requestBody.content)[0] };
+                operation.consumes.push(mt);
+                operation.hasConsumes = true;
+                let tmp = obj.consumes.find(function (e, i, a) {
+                    return (e.mediaType === mt.mediaType);
+                });
+                if (!tmp) {
+                    obj.consumes.push(clone(mt)); // so convertArray works correctly
+                    obj.hasConsumes = true;
+                }
+                operation.bodyParam.schema = contentType.schema;
+                operation.bodyParam.example = JSON.stringify(sampler.sample(contentType.schema, {}, api));
+                for (let p in schemaProperties) {
+                    if (typeof contentType.schema[p] !== 'undefined')
+                        operation.bodyParam[p] = contentType.schema[p];
+                }
+                if (contentType.schema.type) {
+                    operation.bodyParam.type = contentType.schema.type;
+                    operation.bodyParam.dataType = typeMap(contentType.schema.type, operation.bodyParam.required, contentType.schema); // this is the below mentioned
+                }
             }
         }
         operation.bodyParam["%dataType%"] = operation.bodyParam.dataType; // bug in typescript-fetch template?
